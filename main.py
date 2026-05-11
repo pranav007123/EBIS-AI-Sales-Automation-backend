@@ -57,7 +57,7 @@ class Lead(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# LOAD ENV
+# LOAD ENV VARIABLES
 load_dotenv()
 
 # GROQ CLIENT
@@ -71,7 +71,7 @@ class ChatRequest(BaseModel):
     message: str
 
 
-# HOME
+# HOME ROUTE
 @app.get("/")
 def home():
 
@@ -89,7 +89,7 @@ def health():
     }
 
 
-# CHAT
+# CHAT ENDPOINT
 @app.post("/chat")
 async def chat(request: ChatRequest):
 
@@ -101,7 +101,7 @@ async def chat(request: ChatRequest):
         "content": user_message
     })
 
-    # AI CHAT RESPONSE
+    # AI CONVERSATION RESPONSE
     response = client.chat.completions.create(
 
         model="llama-3.1-8b-instant",
@@ -114,7 +114,7 @@ async def chat(request: ChatRequest):
                 You are an AI sales qualification assistant for EBIS Bank.
 
                 Your goals:
-                - qualify leads
+                - qualify business leads
                 - understand customer requirements
                 - collect:
                     1. company size
@@ -129,6 +129,7 @@ async def chat(request: ChatRequest):
                 - avoid greetings
                 - avoid sign-offs
                 - continue naturally
+                - stop asking once all information is collected
                 """
             },
 
@@ -141,13 +142,13 @@ async def chat(request: ChatRequest):
     # AI REPLY
     ai_reply = response.choices[0].message.content
 
-    # SAVE AI RESPONSE
+    # SAVE AI RESPONSE TO MEMORY
     conversation_memory.append({
         "role": "assistant",
         "content": ai_reply
     })
 
-    # EXTRACT LEAD DATA
+    # EXTRACT LEAD INFORMATION
     extract_response = client.chat.completions.create(
 
         model="llama-3.1-8b-instant",
@@ -157,23 +158,28 @@ async def chat(request: ChatRequest):
             {
                 "role": "system",
                 "content": """
-                Extract lead information from the message.
+                You are a JSON extraction engine.
 
-                Return ONLY valid JSON.
+                Return ONLY valid raw JSON.
 
-                Example:
+                No markdown.
+                No explanations.
+                No extra text.
+
+                Format:
 
                 {
-                  "company_size":"200 employees",
-                  "budget":"50000",
-                  "timeline":"2 months",
-                  "use_case":"KYC onboarding",
-                  "lead_quality":"High"
+                  "company_size":"",
+                  "budget":"",
+                  "timeline":"",
+                  "use_case":"",
+                  "lead_quality":""
                 }
 
                 Rules:
                 - lead_quality must be:
                   High / Medium / Low
+                - missing values should be empty strings
                 """
             },
 
@@ -188,8 +194,11 @@ async def chat(request: ChatRequest):
 
     extracted_text = extract_response.choices[0].message.content
 
+    print(extracted_text)
+
     lead_data = {}
 
+    # PARSE JSON
     try:
 
         json_match = re.search(
@@ -208,8 +217,22 @@ async def chat(request: ChatRequest):
 
         print(e)
 
-    # SAVE TO DATABASE
-    if lead_data:
+    # REQUIRED FIELDS
+    required_fields = [
+        "company_size",
+        "budget",
+        "timeline",
+        "use_case"
+    ]
+
+    # CHECK COMPLETION
+    is_complete = all(
+        lead_data.get(field)
+        for field in required_fields
+    )
+
+    # SAVE ONLY COMPLETE LEADS
+    if is_complete:
 
         db = SessionLocal()
 
@@ -248,13 +271,28 @@ async def chat(request: ChatRequest):
 
         db.close()
 
+        # FINAL AI RESPONSE
+        ai_reply = f"""
+Lead qualification completed successfully.
+
+Summary:
+- Company Size: {lead_data.get('company_size')}
+- Budget: {lead_data.get('budget')}
+- Timeline: {lead_data.get('timeline')}
+- Use Case: {lead_data.get('use_case')}
+- Lead Quality: {lead_data.get('lead_quality')}
+"""
+
+        # RESET MEMORY
+        conversation_memory.clear()
+
     return {
         "reply": ai_reply,
         "lead_data": lead_data
     }
 
 
-# GET LEADS
+# GET ALL LEADS
 @app.get("/leads")
 def get_leads():
 
